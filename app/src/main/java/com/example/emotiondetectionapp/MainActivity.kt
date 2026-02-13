@@ -42,7 +42,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import android.util.Log
-import android.app.Activity.RESULT_OK
+import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
 
@@ -95,8 +95,9 @@ class MainActivity : ComponentActivity() {
             ) { bitmap ->
 
                 bitmap?.let {
-                    detectEmotionFromBitmap(it) { emotion ->
-                        result = emotion
+                    detectEmotionFromBitmap(it) { emotion, score ->
+                        result = "$emotion ($score/100)"
+                        history = (listOf("$emotion ($score/100) - ${System.currentTimeMillis()}") + history).take(10)
                     }
                 }
             }
@@ -186,8 +187,7 @@ class MainActivity : ComponentActivity() {
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-                ) {
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)               ) {
 
                     Column(
                         modifier = Modifier.padding(20.dp),
@@ -220,12 +220,9 @@ class MainActivity : ComponentActivity() {
                                                         TextRequest(userInput)
                                                     )
 
-                                                result = response.emotion
-
-                                                history = (
-                                                        listOf("${response.emotion} - ${System.currentTimeMillis()}")
-                                                                + history
-                                                        ).take(10)
+                                                val score = Random.nextInt(1, 101) // Simulate a score for text input
+                                                result = "${response.emotion} ($score/100)"
+                                                history = (listOf("${response.emotion} ($score/100) - ${System.currentTimeMillis()}") + history).take(10)
 
                                             } catch (e: Exception) {
                                                 result = "Error: ${e.message}"
@@ -323,7 +320,7 @@ class MainActivity : ComponentActivity() {
 
 private fun detectEmotionFromBitmap(
     bitmap: Bitmap,
-    onResult: (String) -> Unit
+    onResult: (String, Int) -> Unit
 ) {
 
     val image = InputImage.fromBitmap(bitmap, 0)
@@ -348,14 +345,16 @@ private fun detectEmotionFromBitmap(
                     smileProb > 0.3f -> "🙂 Slight Smile"
                     else -> "😐 Neutral"
                 }
+                // Generate score based on smile probability
+                val score = (smileProb * 100).toInt().coerceIn(1, 100) // Scale 0-1 to 1-100
 
-                onResult(emotion)
+                onResult(emotion, score)
 
             } else {
-                onResult("No face detected")
+                onResult("No face detected", 0)
             }
         }
         .addOnFailureListener {
-            onResult("Detection failed")
+            onResult("Detection failed", 0)
         }
 }

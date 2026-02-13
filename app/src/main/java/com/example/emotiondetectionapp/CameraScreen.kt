@@ -1,7 +1,12 @@
 package com.example.emotiondetectionapp
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -10,7 +15,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Text
 import androidx.compose.runtime.* 
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,64 +29,106 @@ import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.random.Random
 
+@SuppressLint("UnsafeOptInUsageError") // For experimental ImageAnalysis use
 @Composable
 fun CameraScreen(navController: NavController) {
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember { PreviewView(context) }
-    var faceCount by remember { mutableIntStateOf(0) }
+
+    var detectedEmotion by remember { mutableStateOf("No face detected") }
+    var emotionScore by remember { mutableIntStateOf(0) }
+
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // Permission state and launcher for Camera
+    var hasCameraPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    }
 
-        AndroidView(
-            factory = { previewView },
-            modifier = Modifier.fillMaxSize()
-        )
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        hasCameraPermission = it
+        if (!it) {
+            Log.e("CameraScreen", "Camera permission denied.")
+            // Optionally, navigate back or show a message if permission is denied
+            navController.popBackStack()
+        }
+    }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(16.dp)
-        ) {
-            Card {
-                Text(
-                    text = "Faces detected: $faceCount",
-                    modifier = Modifier.padding(12.dp)
-                )
+    // Request camera permission on launch if not already granted
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    if (hasCameraPermission) {
+        Box(modifier = Modifier.fillMaxSize()) {
+
+            AndroidView(
+                factory = { previewView },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(16.dp)
+            ) {
+                Card {
+                    Text(
+                        text = "Emotion: $detectedEmotion ($emotionScore/100)",
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+
+            Button(
+                onClick = { navController.popBackStack() },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(16.dp)
+            ) {
+                Text("Back")
             }
         }
 
-        Button(
-            onClick = { navController.popBackStack() },
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(16.dp)
-        ) {
-            Text("Back")
+        LaunchedEffect(previewView) {
+            startCamera(
+                context,
+                lifecycleOwner,
+                previewView,
+                cameraExecutor
+            ) { emotion, score ->
+                detectedEmotion = emotion
+                emotionScore = score
+            }
+        }
+    } else {
+        // Show a message or a button to request permission again
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Camera permission is required to use this feature.")
         }
     }
 
-    LaunchedEffect(Unit) {
-        startCamera(
-            context,
-            lifecycleOwner,
-            previewView,
-            cameraExecutor
-        ) { count ->
-            faceCount = count
-        }
+    DisposableEffect(Unit) {
+        onDispose { cameraExecutor.shutdown() }
     }
 }
 
+
+@SuppressLint("UnsafeOptInUsageError") // For ImageProxy.getImage()
 private fun startCamera(
     context: Context,
     lifecycleOwner: LifecycleOwner,
     previewView: PreviewView,
     cameraExecutor: ExecutorService,
-    onFaceDetected: (Int) -> Unit
+    onEmotionDetected: (String, Int) -> Unit
 ) {
 
     val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -100,30 +146,47 @@ private fun startCamera(
 
         val options = FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
             .build()
 
         val detector = FaceDetection.getClient(options)
 
         imageAnalyzer.setAnalyzer(cameraExecutor) { imageProxy ->
 
-            try {
-                val bitmap = imageProxy.toBitmap()
-                val image = InputImage.fromBitmap(bitmap, 0)
+            val mediaImage = imageProxy.image
+            if (mediaImage != null) {
+                val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
 
                 detector.process(image)
                     .addOnSuccessListener { faces ->
-                        onFaceDetected(faces.size)
+
+                        if (faces.isNotEmpty()) {
+
+                            val face = faces[0]
+                            val smileProb = face.smilingProbability ?: 0f
+
+                            val emotion = when {
+                                smileProb > 0.7f -> "😊 Happy"
+                                smileProb > 0.3f -> "🙂 Slight Smile"
+                                else -> "😐 Neutral"
+                            }
+                            val score = (smileProb * 100).toInt().coerceIn(1, 100)
+
+                            onEmotionDetected(emotion, score)
+
+                        } else {
+                            onEmotionDetected("No face detected", 0)
+                        }
                     }
                     .addOnFailureListener {
-                        onFaceDetected(0)
+                        Log.e("CameraScreen", "Face detection failed: ${it.message}")
+                        onEmotionDetected("Detection failed", 0)
                     }
                     .addOnCompleteListener {
                         imageProxy.close()
                     }
-
-            } catch (e: Exception) {
+            } else {
                 imageProxy.close()
-                Log.e("Camera", "Error: ${e.message}")
             }
         }
 
@@ -138,7 +201,7 @@ private fun startCamera(
                 imageAnalyzer
             )
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("CameraScreen", "Camera binding failed: ${e.message}")
         }
 
     }, ContextCompat.getMainExecutor(context))
