@@ -33,3 +33,7 @@ Pardhu Reddy
 
 ---
 ⭐ If you like this project, consider giving it a star!
+## 📸 Screenshots
+
+![Home Screen](screenshots/screen1.png)
+![Emotion Detection](screenshots/screen2.png)
